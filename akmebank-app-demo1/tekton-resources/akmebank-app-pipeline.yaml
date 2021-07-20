@@ -1,0 +1,65 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: akmebank-app-pipeline
+spec:
+  resources:
+  - name: sourcerepo
+    type: git
+  - name: kustomize-config-repo
+    type: git
+  - name: ui-image
+    type: image
+  - name: manifest-image
+    type: image
+  tasks:
+  # - name: get-sourcerepo-commit-id
+  #   taskRef:
+  #     name: akmebank-app-git-info
+  #   resources:
+  #     inputs:
+  #     - name: sourcerepo
+  #       resource: sourcerepo
+
+  #----------------------------------------------
+  #  Task 1: build ui image
+  #----------------------------------------------
+  - name: build-and-push-akmebank-ui-image
+    taskRef:
+      name: akmebank-app-image-task
+    # runAfter:
+    # - get-sourcerepo-commit-id
+    params:
+      - name: pathToDockerFile
+        value: ./Dockerfile
+      - name: pathToContext
+        value: /workspace/sourcerepo/akmebank-ui/
+      # # if params named "CHAINS-GIT_COMMIT" and "CHAINS-GIT_URL" are set,
+      # # the commitID and url will be included in attestation
+      # - name: CHAINS-GIT_COMMIT
+      #   value: $(tasks.get-sourcerepo-commit-id.results.commit-id)
+      # - name: CHAINS-GIT_URL
+      #   value: $(resources.sourcerepo.url)
+    resources:
+      inputs:
+      - name: sourcerepo
+        resource: sourcerepo
+      outputs:
+      - name: builtImage
+        resource: ui-image
+  #----------------------------------------------
+  #  Task 2: build manifest image
+  #----------------------------------------------
+  - name: build-manifest-and-push-image
+    taskRef:
+      name: akmebank-app-kustomize-manifest-task
+    params:
+      - name: pathToKustomizeBase
+        value: /workspace/kustomize-config-repo/roles/dev
+    resources:
+      inputs:
+      - name: kustomize-config-repo
+        resource: kustomize-config-repo
+      outputs:
+      - name: builtImage
+        resource: manifest-image

@@ -1,0 +1,167 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: akme-account-command
+  namespace: custom-ns
+spec:
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: account-command-selector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akme-account-query
+  namespace: custom-ns
+spec:
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+  selector:
+    app: account-query-selector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akme-akmebank-ui
+  namespace: custom-ns
+spec:
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8000
+  selector:
+    app: akmebank-ui-selector
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/part-of: akmebank
+  name: akme-account-command
+  namespace: custom-ns
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: account-command-selector
+  template:
+    metadata:
+      labels:
+        app: account-command-selector
+    spec:
+      containers:
+      - env:
+        - name: CONFIG_MOUNT_PATH
+          value: /etc/config
+        image: quay.io/gajananan/account-command-ms:4.0.0
+        imagePullPolicy: Always
+        name: account-command
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+        - mountPath: /etc/config
+          name: cos-creds
+          readOnly: true
+      volumes:
+      - name: cos-creds
+        secret:
+          secretName: cos-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/part-of: akmebank
+  name: akme-account-query
+  namespace: custom-ns
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: account-query-selector
+  template:
+    metadata:
+      labels:
+        app: account-query-selector
+    spec:
+      containers:
+      - env:
+        - name: CONFIG_MOUNT_PATH
+          value: /etc/config
+        image: quay.io/gajananan/account-query-ms:4.0.0
+        imagePullPolicy: Always
+        name: account-query
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        volumeMounts:
+        - mountPath: /etc/config
+          name: cos-creds
+          readOnly: true
+      volumes:
+      - name: cos-creds
+        secret:
+          secretName: cos-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/part-of: akmebank
+  name: akme-akmebank-ui
+  namespace: custom-ns
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: akmebank-ui-selector
+  template:
+    metadata:
+      labels:
+        app: akmebank-ui-selector
+    spec:
+      containers:
+      - image: gcr.io/hk-image-registry/akmebank-ui:4.0.1
+        imagePullPolicy: Always
+        name: akmebank-ui
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  annotations:
+    openshift.io/host.generated: "true"
+  name: akme-akmebank-ui
+  namespace: custom-ns
+spec:
+  host: null
+  port:
+    targetPort: 8000
+  tls:
+    insecureEdgeTerminationPolicy: None
+    termination: edge
+  to:
+    kind: Service
+    name: akmebank-ui
+    weight: 100
+  wildcardPolicy: None

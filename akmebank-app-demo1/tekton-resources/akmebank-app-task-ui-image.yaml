@@ -1,0 +1,124 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: akmebank-app-image-task
+spec:
+  params:
+  - name: pathToDockerFile
+    type: string
+    description: The path to the dockerfile to build
+    default: /workspace/sourcerepo/Dockerfile
+  - name: pathToContext
+    type: string
+    description: The build context used by Kaniko
+    default: /workspace/sourcerepo
+  # - name: CHAINS-GIT_COMMIT
+  #   type: string
+  #   description: The commit ID of source repo
+  #   default: ""
+  # - name: CHAINS-GIT_URL
+  #   type: string
+  #   description: The url of source repo
+  #   default: ""
+  resources:
+    inputs:
+    - name: sourcerepo
+      type: git
+    outputs:
+    - name: builtImage
+      type: image
+      targetPath: $(params.pathToContext)/image-digest
+  steps:
+  # --------------------------------------------------
+  #  Step 1: build an image with kaniko
+  # --------------------------------------------------
+  - name: build-and-push
+    image: gcr.io/kaniko-project/executor:v1.6.0-debug
+    command:
+    - /kaniko/executor
+    args:
+    - --context=$(params.pathToContext)
+    - --dockerfile=$(params.pathToDockerFile)
+    - --destination=$(outputs.resources.builtImage.url)
+    - --oci-layout-path=$(params.pathToContext)/image-digest
+    volumeMounts:
+    - name: gcr-secret
+      mountPath: /secret
+    env:
+    - name: GOOGLE_APPLICATION_CREDENTIALS
+      value: /secret/gcr-credential.json
+  # --------------------------------------------------
+  #  Step 2: sign the build image with cosign
+  # --------------------------------------------------
+  - name: sign-image
+    image: gcr.io/projectsigstore/cosign/ci/cosign:e6d91a70e5a59d28d4c222d8fbc59b82ff445e94
+    command:
+    - cosign
+    args:
+    - sign
+    - -key=/secret/cosign.key
+    - $(outputs.resources.builtImage.url)
+    env:
+    - name: COSIGN_PASSWORD # this env variable is used by cosign password function
+      valueFrom:
+        secretKeyRef:
+          name: signing-secrets
+          key: cosign.password
+    volumeMounts:
+    - name: signing-secrets
+      mountPath: /secret
+    - name: gcr-registry-docker-config
+      mountPath: /root/.docker/
+  # --------------------------------------------------
+  #  Step 3: generate sbom of image source codes
+  # --------------------------------------------------
+  - name: gen-sbom
+    # TODO: replace this image with `spdx/spdx-sbom-generator` once the latest version is released in dockerhub
+    # A brief description about image `gcr.io/sigstore-test-project/spdx-sbom-generator:dev`
+    # - this image is built from the latest Dockerfile in spdx-sbom-generator repo
+    # - a small bug on npm module has been fixed
+    image: gcr.io/hk-image-registry/spdx-sbom-generator:dev
+    imagePullPolicy: Always
+    command:
+    - ash
+    # all modules must be installed before running `spdx-sbom-generator`
+    # need to wait some updates of spdx-sbom-generator ... ?
+    args:
+    - -c
+    - cd $(params.pathToContext) && npm install && /spdx-sbom-generator --path=$(params.pathToContext) --output-dir=/etc/sbom-result
+    volumeMounts:
+    - name: sbom-result
+      mountPath: /etc/sbom-result
+  # TODO: add sign-sbom step ?
+  # --------------------------------------------------
+  #  Step 4: upload sbom to OCI registry with cosign
+  # --------------------------------------------------
+  - name: attach-sbom-to-image
+    image: gcr.io/projectsigstore/cosign/ci/cosign:e6d91a70e5a59d28d4c222d8fbc59b82ff445e94
+    command:
+    - cosign
+    args:
+    - attach
+    - sbom
+    - -sbom=/etc/sbom-result/bom-npm.spdx
+    - $(outputs.resources.builtImage.url)
+    volumeMounts:
+    - name: gcr-registry-docker-config
+      mountPath: /root/.docker/
+    - name: sbom-result
+      mountPath: /etc/sbom-result
+  volumes:
+  - name: sbom-result
+    emptyDir: {}
+  - name: gcr-secret
+    secret:
+      secretName: tekton-gcr-secret
+  - name: gcr-registry-docker-config
+    secret:
+      secretName: tektoncd-chains-gcr-secret
+      items:
+        - key: .dockerconfigjson
+          path: config.json
+  - name: signing-secrets
+    secret:
+      secretName: signing-secrets

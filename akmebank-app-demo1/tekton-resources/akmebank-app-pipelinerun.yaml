@@ -1,0 +1,38 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: akmebank-app-pipelinerun
+spec:
+  serviceAccountName: tekton-github-account
+  pipelineRef:
+    name: akmebank-app-pipeline
+  resources:
+  - name: sourcerepo
+    resourceSpec:
+      type: git
+      params:
+      - name: revision
+        value: master
+      - name: url
+        value: https://github.com/gajananan/akmebank-app.git
+  - name: kustomize-config-repo
+    resourceSpec:
+      type: git
+      params:
+      - name: revision
+        value: main
+      - name: url
+        value: https://github.com/hirokuni-kitahara/akmebank-config.git
+  - name: ui-image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/hk-image-registry/akmebank-ui:4.0.1
+  - name: manifest-image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/hk-image-registry/akmebank-app-manifest:1.0.0
+
