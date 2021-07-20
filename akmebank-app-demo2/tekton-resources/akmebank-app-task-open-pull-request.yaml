@@ -1,0 +1,325 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: akmebank-app-open-pull-request
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.12.1"
+    tekton.dev/tags: github
+    tekton.dev/displayName: "open github pull request"
+spec:
+  description: >-
+    This task will open a PR on Github based on several parameters.
+    This could be useful in GitOps repositories for example.
+  params:
+  - name: pathToKustomizeBase
+    type: string
+    description: The build context used by Kustomization
+    default: /workspace/kustomize-config-repo/deploy
+  - name: repoURL
+    type: string
+    description: The URL for makeing REPO_FULL_NAME
+  - name: uiImage
+    type: string
+    description: The image reference of UI image
+    default: ""
+  - name: GITHUB_HOST_URL
+    description: |
+      The GitHub host, adjust this if you run a GitHub enteprise.
+    default: "api.github.com"
+    type: string
+  - name: GIT_USER_NAME
+    type: string
+    description: Git user name for performing git operation.
+    default: ""
+  - name: GIT_USER_EMAIL
+    type: string
+    description: Git user email for performing git operation.
+    default: ""
+  - name: API_PATH_PREFIX
+    description: |
+      The API path prefix, GitHub Enterprise has a prefix e.g. /api/v3
+    default: ""
+    type: string
+  - name: REPO_FULL_NAME
+    description: |
+      The GitHub repository full name, e.g.: tektoncd/catalog
+    type: string
+    default: "" # if empty, use repoURL for generating this value
+  - name: GITHUB_TOKEN_SECRET_NAME
+    description: |
+      The name of the kubernetes secret that contains the GitHub token, default: tekton-github-token
+    type: string
+    default: tekton-github-token
+  - name: GITHUB_TOKEN_SECRET_KEY
+    description: |
+      The key within the kubernetes secret that contains the GitHub token, default: password
+    type: string
+    default: password
+  - name: AUTH_TYPE
+    description: |
+      The type of authentication to use. You could use the less secure "Basic" for example
+    type: string
+    default: Bearer
+  - name: HEAD
+    description: |
+      The name of the branch where your changes are implemented.
+    type: string
+    default: "" # if empty, use /etc/shared-dir/branch_name.txt which is created by create-pr-branch step for generating this value
+  - name: BASE
+    description: |
+      The name of the branch you want the changes pulled into.
+    type: string
+  - name: BODY
+    description: |
+      The body description of the pull request.
+    type: string
+  - name: TITLE
+    description: |
+      The title of the pull request.
+    type: string
+  results:
+    - name: NUMBER
+      description: Number of the created pull request.
+    - name: URL
+      description: URL of the created deployment.
+  resources:
+    inputs:
+    - name: kustomize-config-repo
+      type: git
+    outputs:
+    - name: ui-image
+      type: image
+      targetPath: /tmp/image-digest
+  steps:
+  # --------------------------------------------------
+  #  Step 1: update kustomization.yaml with new image tags
+  # --------------------------------------------------
+  - name: change-image-version
+    image: alpine:3.13.5
+    script: |
+      #!/bin/ash
+
+      apk add --no-cache --repository https://pkgs.alpinelinux.org/package/edge/community/ yq
+
+      cd $(params.pathToKustomizeBase)
+
+      function get_image_name() {
+        image=$1
+        if [ `echo $image | grep ':'` ] ; then
+          tag=`get_image_tag $image`
+          echo $image | sed "s/:$tag//g"
+        else
+          echo $image
+        fi
+      }
+
+      function get_image_tag() {
+        image=$1
+        if [ `echo $image | grep ':'` ] ; then
+          echo ${image##*:}
+        else
+          echo "latest"
+        fi
+      }
+
+      ui_image=$(params.uiImage)
+      ui_image_name=`get_image_name $ui_image`
+      ui_image_tag=`get_image_tag $ui_image`
+      echo "ui_image_name: ${ui_image_name}"
+      echo "ui_image_tag: ${ui_image_tag}"
+
+      yq w --inplace kustomization.yaml 'images.(name==UI_IMAGE_AND_TAG).newName' $ui_image_name
+      yq w --inplace kustomization.yaml 'images.(name==UI_IMAGE_AND_TAG).newTag' $ui_image_tag
+      cat kustomization.yaml
+
+      
+
+  # --------------------------------------------------
+  #  Step 2: create a branch for PR
+  # --------------------------------------------------
+  - name: create-pr-branch
+    image: docker.io/alpine/git:v2.26.2
+    script: |
+      #!/usr/bin/env sh
+      set -eu
+      
+      cd $(params.pathToKustomizeBase)
+      
+      # Setting up the config for the git.
+        git config --global user.email "$(params.GIT_USER_EMAIL)"
+        git config --global user.name "$(params.GIT_USER_NAME)"
+
+      timestamp=`date +%s`
+      branch_name=`echo tekton-task-image-update-$timestamp`
+      git diff
+      git checkout -b $branch_name
+      git add -u
+      git commit -m "update image versions depending on tekton task result"
+      git push origin $branch_name
+      echo $branch_name > /etc/shared-dir/branch_name.txt
+    volumeMounts:
+    - name: shared-dir
+      mountPath: /etc/shared-dir
+
+  # --------------------------------------------------
+  #  Step 3: open a PR
+  # --------------------------------------------------
+  - name: open-pr
+    env:
+      - name: GITHUBTOKEN
+        valueFrom:
+          secretKeyRef:
+            name: $(params.GITHUB_TOKEN_SECRET_NAME)
+            key: $(params.GITHUB_TOKEN_SECRET_KEY)
+      - name: PULLREQUEST_NUMBER_PATH
+        value: $(results.NUMBER.path)
+      - name: PULLREQUEST_URL_PATH
+        value: $(results.URL.path)
+
+    image: registry.access.redhat.com/ubi8/python-38:1-34.1599745032
+    script: |
+      #!/usr/libexec/platform-python
+      """This script will open a PR on Github"""
+      import json
+      import os
+      import sys
+      import http.client
+      repo_full_name = "$(params.REPO_FULL_NAME)"
+      if repo_full_name == "":
+          # this does not work currently
+          repo_full_name = "$(params.repoURL)".replace("https://github.com/", "").replace(".git", "")
+      open_pr_url = "$(params.API_PATH_PREFIX)" + "/repos/" + repo_full_name + "/pulls"
+      print("open_pr_url: {}".format(open_pr_url))
+      branch_name = "$(params.HEAD)"
+      if branch_name == "":
+          try:
+              with open("/etc/shared-dir/branch_name.txt", "r") as f:
+                  branch_name = f.read()
+                  branch_name = branch_name.replace("\n", "")
+          except:
+              pass
+      print("branch_name: {}".format(branch_name))
+      data = {
+          "head": branch_name,
+          "base": "$(params.BASE)",
+          "title": "$(params.TITLE)",
+          "body": "$(params.BODY)"
+      }
+      print("Sending this data to GitHub: ")
+      print(data)
+      authHeader = "$(params.AUTH_TYPE) " + os.environ["GITHUBTOKEN"]
+      # This is for our fake github server
+      if "$(params.GITHUB_HOST_URL)".startswith("http://"):
+          conn = http.client.HTTPConnection("$(params.GITHUB_HOST_URL)"
+                                            .replace("http://", ""))
+      else:
+          conn = http.client.HTTPSConnection("$(params.GITHUB_HOST_URL)")
+      conn.request(
+          "POST",
+          open_pr_url,
+          body=json.dumps(data),
+          headers={
+              "User-Agent": "TektonCD, the peaceful cat",
+              "Authorization": authHeader,
+              "Accept": "application/vnd.github.v3+json ",
+          })
+      resp = conn.getresponse()
+      if not str(resp.status).startswith("2"):
+          print("Error: %d" % (resp.status))
+          print(resp.read())
+          sys.exit(1)
+      else:
+          # https://docs.github.com/en/rest/reference/pulls#create-a-pull-request
+          body = json.loads(resp.read().decode())
+          open(os.environ.get('PULLREQUEST_NUMBER_PATH'), 'w').write(f'{body["number"]}')
+          open(os.environ.get('PULLREQUEST_URL_PATH'), 'w').write(body["html_url"])
+          print("GitHub pull request created for " + repo_full_name + ": "
+                f'number={body["number"]} url={body["html_url"]}')
+          pull_number_str = str(body["number"])
+          with open("/etc/shared-dir/pull_number.txt", "w") as f:
+              f.write(pull_number_str)
+          print("PR number: " + pull_number_str + " is written in /etc/shared-dir/pull_number.txt")
+    volumeMounts:
+    - name: shared-dir
+      mountPath: /etc/shared-dir
+  # --------------------------------------------------
+  #  Step 4: wait until PR is merged
+  # --------------------------------------------------
+  - name: wait-pr-merge
+    env:
+      - name: GITHUBTOKEN
+        valueFrom:
+          secretKeyRef:
+            name: $(params.GITHUB_TOKEN_SECRET_NAME)
+            key: $(params.GITHUB_TOKEN_SECRET_KEY)
+      - name: PULLREQUEST_NUMBER_PATH
+        value: $(results.NUMBER.path)
+      - name: PULLREQUEST_URL_PATH
+        value: $(results.URL.path)
+
+    image: registry.access.redhat.com/ubi8/python-38:1-34.1599745032
+    script: |
+      #!/usr/libexec/platform-python
+      """This script will open a PR on Github"""
+      import json
+      import os
+      import sys
+      import time
+      import http.client
+
+      pull_number = ""
+      try:
+          with open("/etc/shared-dir/pull_number.txt", "r") as f:
+              pull_number = f.read()
+              pull_number = pull_number.replace("\n", "")
+      except:
+          pass
+      print("pull_number: {}".format(pull_number))
+      repo_full_name = "$(params.REPO_FULL_NAME)"
+      if repo_full_name == "":
+          # this does not work currently
+          repo_full_name = "$(params.repoURL)".replace("https://github.com/", "").replace(".git", "")
+      open_pr_url = "$(params.API_PATH_PREFIX)" + "/repos/" + repo_full_name + "/pulls/" + pull_number + "/merge"
+      print("open_pr_url: {}".format(open_pr_url))
+
+      max_retry_num = 6
+      retry_interval_seconds = 30
+      for i in range(max_retry_num):
+          print("Checking if the PR " + pull_number + " is merged.")
+          authHeader = "$(params.AUTH_TYPE) " + os.environ["GITHUBTOKEN"]
+          # This is for our fake github server
+          if "$(params.GITHUB_HOST_URL)".startswith("http://"):
+              conn = http.client.HTTPConnection("$(params.GITHUB_HOST_URL)"
+                                                .replace("http://", ""))
+          else:
+              conn = http.client.HTTPSConnection("$(params.GITHUB_HOST_URL)")
+          conn.request(
+              "GET",
+              open_pr_url,
+              headers={
+                  "User-Agent": "TektonCD, the peaceful cat",
+                  "Authorization": authHeader,
+                  "Accept": "application/vnd.github.v3+json ",
+              })
+          resp = conn.getresponse()
+          if not str(resp.status).startswith("2"):
+              print("Error: %d" % (resp.status))
+              print(resp.read())
+              merged = False
+              print("The PR is not merged. Check it again in " + str(retry_interval_seconds) + " seconds.")
+              time.sleep(retry_interval_seconds)
+          else:
+              merged = True
+              print("The PR has been merged.")
+              break
+      if not merged:
+          print("Retry count exceeded the max number without merge.")
+          sys.exit(1)
+    volumeMounts:
+    - name: shared-dir
+      mountPath: /etc/shared-dir
+  volumes:
+  - name: shared-dir
+    emptyDir: {}

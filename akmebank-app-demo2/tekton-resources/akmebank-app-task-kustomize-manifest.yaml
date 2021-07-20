@@ -1,0 +1,93 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: akmebank-app-kustomize-manifest-task
+spec:
+  params:
+  - name: pathToKustomizeBase
+    type: string
+    description: The build context used by Kustomization
+    default: /workspace/kustomize-config-repo/deploy
+  # - name: CHAINS-GIT_COMMIT
+  #   type: string
+  #   description: The commit ID of source repo
+  #   default: ""
+  # - name: CHAINS-GIT_URL
+  #   type: string
+  #   description: The url of source repo
+  #   default: ""
+  resources:
+    inputs:
+    - name: kustomize-config-repo
+      type: git
+    outputs:
+    - name: builtImage
+      type: image
+      targetPath: /workspace/kustomize-config-repo/image-digest
+  steps:
+  # --------------------------------------------------
+  #  Step 1: build a manifest YAML with kustomize
+  # --------------------------------------------------
+  - name: kust-build
+    # official image `k8s.gcr.io/kustomize/kustomize:v3.8.7` does not contain `git` executable
+    image: gcr.io/hk-image-registry/kustomize-git:v3.8.7
+    command:
+    - /app/kustomize
+    args:
+    - build
+    - --output=/etc/kust-result/manifest.yaml
+    - $(params.pathToKustomizeBase)
+    volumeMounts:
+    - name: kust-result
+      mountPath: /etc/kust-result
+  # --------------------------------------------------
+  #  Step 2: create a manifest image and sign it with kubectl-sigstore
+  # --------------------------------------------------
+  - name: k8s-manifest-sign
+    image: gcr.io/hk-image-registry/kubectl-sigstore:dev
+    command:
+    - kubectl-sigstore
+    args:
+    - sign
+    - --filename=/etc/kust-result/manifest.yaml
+    - --image=$(outputs.resources.builtImage.url)
+    - --key=/secret/cosign.key
+    env:
+    - name: COSIGN_PASSWORD # this env variable is used by cosign password function
+      valueFrom:
+        secretKeyRef:
+          name: signing-secrets
+          key: cosign.password
+    volumeMounts:
+    - name: kust-result
+      mountPath: /etc/kust-result
+    - name: signing-secrets
+      mountPath: /secret
+    - name: gcr-registry-docker-config
+      mountPath: /root/.docker/
+  # --------------------------------------------------
+  #  Step 3: get image layout file (index.json) with skopeo
+  # --------------------------------------------------
+  - name: get-image-digest
+    image: quay.io/skopeo/stable:latest
+    command:
+    - skopeo
+    args:
+    - copy
+    - docker://$(outputs.resources.builtImage.url)
+    - oci:/workspace/kustomize-config-repo/image-digest
+    volumeMounts:
+    - name: gcr-registry-docker-config
+      mountPath: /root/.docker/
+  volumes:
+  - name: kust-result
+    emptyDir: {}
+  - name: gcr-registry-docker-config
+    secret:
+      secretName: tektoncd-chains-gcr-secret
+      items:
+        - key: .dockerconfigjson
+          path: config.json
+  - name: signing-secrets
+    secret:
+      secretName: signing-secrets

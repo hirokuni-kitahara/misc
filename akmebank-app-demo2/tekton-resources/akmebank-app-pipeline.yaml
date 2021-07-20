@@ -1,0 +1,113 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: akmebank-app-pipeline
+spec:
+  params:
+  - name: GIT_USER_NAME
+    type: string
+    description: Git user name for performing git operation.
+    default: ""
+  - name: GIT_USER_EMAIL
+    type: string
+    description: Git user email for performing git operation.
+    default: ""
+  resources:
+  - name: sourcerepo
+    type: git
+  - name: kustomize-config-repo
+    type: git
+  - name: ui-image
+    type: image
+  # - name: command-image
+  #   type: image
+  # - name: query-image
+  #   type: image
+  - name: manifest-image
+    type: image
+  tasks:
+  # - name: get-sourcerepo-commit-id
+  #   taskRef:
+  #     name: akmebank-app-git-info
+  #   resources:
+  #     inputs:
+  #     - name: sourcerepo
+  #       resource: sourcerepo
+
+  #----------------------------------------------
+  #  Task 1: build ui image
+  #----------------------------------------------
+  - name: build-and-push-akmebank-ui-image
+    taskRef:
+      name: akmebank-app-image-task
+    # runAfter:
+    # - get-sourcerepo-commit-id
+    params:
+      - name: pathToDockerFile
+        value: ./Dockerfile
+      - name: pathToContext
+        value: /workspace/sourcerepo/akmebank-ui/
+      # # if params named "CHAINS-GIT_COMMIT" and "CHAINS-GIT_URL" are set,
+      # # the commitID and url will be included in attestation
+      # - name: CHAINS-GIT_COMMIT
+      #   value: $(tasks.get-sourcerepo-commit-id.results.commit-id)
+      # - name: CHAINS-GIT_URL
+      #   value: $(resources.sourcerepo.url)
+    resources:
+      inputs:
+      - name: sourcerepo
+        resource: sourcerepo
+      outputs:
+      - name: builtImage
+        resource: ui-image
+  #----------------------------------------------
+  #  Task 2: open PR for update image tags
+  #----------------------------------------------
+  - name: open-pull-request
+    taskRef:
+      name: akmebank-app-open-pull-request
+    runAfter:
+    - build-and-push-akmebank-ui-image
+    params:
+    - name: pathToKustomizeBase
+      value: /workspace/kustomize-config-repo/roles/dev
+    - name: uiImage
+      value: $(outputs.resources.ui-image.url)
+    - name: repoURL
+      value: $(inputs.resources.kustomize-config-repo.url)
+    - name: GIT_USER_NAME
+      value: $(params.GIT_USER_NAME)
+    - name: GIT_USER_EMAIL
+      value: $(params.GIT_USER_EMAIL)
+    - name: BASE
+      value: main
+    - name: TITLE
+      value: "image version update PR by tekton task"
+    - name: BODY
+      value: "this PR is created by tekton task `akmebank-app-pipeline`"
+    resources:
+      inputs:
+      - name: kustomize-config-repo
+        resource: kustomize-config-repo
+      # just for sharing ui-image name
+      outputs:
+      - name: ui-image
+        resource: ui-image
+  #----------------------------------------------
+  #  Task 3: build manifest image
+  #----------------------------------------------
+  - name: build-manifest-and-push-image
+    taskRef:
+      name: akmebank-app-kustomize-manifest-task
+    runAfter:
+    - open-pull-request
+    params:
+      - name: pathToKustomizeBase
+        value: /workspace/kustomize-config-repo/roles/dev
+    resources:
+      inputs:
+      - name: kustomize-config-repo
+        resource: kustomize-config-repo
+      outputs:
+      - name: builtImage
+        resource: manifest-image
