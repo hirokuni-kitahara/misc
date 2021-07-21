@@ -1,21 +1,17 @@
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: akmebank-app-kustomize-manifest-task
+  name: build-manifest-and-deploy-app
 spec:
   params:
   - name: pathToKustomizeBase
     type: string
     description: The build context used by Kustomization
     default: /workspace/kustomize-config-repo/deploy
-  # - name: CHAINS-GIT_COMMIT
-  #   type: string
-  #   description: The commit ID of source repo
-  #   default: ""
-  # - name: CHAINS-GIT_URL
-  #   type: string
-  #   description: The url of source repo
-  #   default: ""
+  - name: deployNamespace
+    type: string
+    description: The namespace in which app manifest will be deployed
+    default: "" # if empty, use namespace metadata if specified in manifest; otherwise just use `default` ns
   resources:
     inputs:
     - name: kustomize-config-repo
@@ -79,6 +75,23 @@ spec:
     volumeMounts:
     - name: gcr-registry-docker-config
       mountPath: /root/.docker/
+  # --------------------------------------------------
+  #  Step 4: deploy the built manifest
+  # --------------------------------------------------
+  - name: deploy-app
+    image: bitnami/kubectl:1.20.9
+    script: |
+      #!/bin/bash
+      ns_option=$(params.deployNamespace)
+      if [[ $ns_option != "" ]]; then
+          ns_option="--namespace=${ns_option}"
+      fi
+      
+      # ignore errors just for ignoring `Route` kind error in kind cluster
+      kubectl apply $ns_option -f /etc/kust-result/manifest.yaml || true
+    volumeMounts:
+    - name: kust-result
+      mountPath: /etc/kust-result
   volumes:
   - name: kust-result
     emptyDir: {}
@@ -91,3 +104,5 @@ spec:
   - name: signing-secrets
     secret:
       secretName: signing-secrets
+
+  

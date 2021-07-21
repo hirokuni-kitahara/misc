@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: build-ui-image
+  name: build-query-image
 spec:
   params:
   - name: pathToDockerFile
@@ -32,6 +32,17 @@ spec:
   # --------------------------------------------------
   #  Step 1: build an image with kaniko
   # --------------------------------------------------
+  - name: install-dependencies
+    image: maven:3.8.1
+    script: |
+      #!/bin/bash
+      
+      cd $(params.pathToContext)../
+      mvn install -DskipTests && mvn package -DskipTests
+
+  # --------------------------------------------------
+  #  Step 2: build an image with kaniko
+  # --------------------------------------------------
   - name: build-and-push
     image: gcr.io/kaniko-project/executor:v1.6.0-debug
     command:
@@ -50,7 +61,7 @@ spec:
     - name: GOOGLE_APPLICATION_CREDENTIALS
       value: /secret/gcr-credential.json
   # --------------------------------------------------
-  #  Step 2: sign the build image with cosign
+  #  Step 3: sign the build image with cosign
   # --------------------------------------------------
   - name: sign-image
     image: gcr.io/projectsigstore/cosign/ci/cosign:e6d91a70e5a59d28d4c222d8fbc59b82ff445e94
@@ -72,7 +83,7 @@ spec:
     - name: gcr-registry-docker-config
       mountPath: /root/.docker/
   # --------------------------------------------------
-  #  Step 3: generate sbom of image source codes
+  #  Step 4: generate sbom of image source codes
   # --------------------------------------------------
   - name: gen-sbom
     # TODO: replace this image with `spdx/spdx-sbom-generator` once the latest version is released in dockerhub
@@ -81,19 +92,18 @@ spec:
     # - a small bug on npm module has been fixed
     image: gcr.io/hk-image-registry/spdx-sbom-generator:dev
     imagePullPolicy: Always
-    command:
-    - ash
-    # all modules must be installed before running `spdx-sbom-generator`
-    # need to wait some updates of spdx-sbom-generator ... ?
-    args:
-    - -c
-    - cd $(params.pathToContext) && npm install && /spdx-sbom-generator --path=$(params.pathToContext) --output-dir=/etc/sbom-result
+    script: |
+      #!/bin/ash
+      cd $(params.pathToContext)../
+      mvn install -DskipTests && mvn package -DskipTests
+
+      /spdx-sbom-generator --path=$(params.pathToContext) --output-dir=/etc/sbom-result
     volumeMounts:
     - name: sbom-result
       mountPath: /etc/sbom-result
   # TODO: add sign-sbom step ?
   # --------------------------------------------------
-  #  Step 4: upload sbom to OCI registry with cosign
+  #  Step 5: upload sbom to OCI registry with cosign
   # --------------------------------------------------
   - name: attach-sbom-to-image
     image: gcr.io/projectsigstore/cosign/ci/cosign:e6d91a70e5a59d28d4c222d8fbc59b82ff445e94
@@ -102,7 +112,7 @@ spec:
     args:
     - attach
     - sbom
-    - -sbom=/etc/sbom-result/bom-npm.spdx
+    - -sbom=/etc/sbom-result/bom-Java-Maven.spdx
     - $(outputs.resources.builtImage.url)
     volumeMounts:
     - name: gcr-registry-docker-config

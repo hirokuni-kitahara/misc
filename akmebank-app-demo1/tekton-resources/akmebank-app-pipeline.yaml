@@ -10,36 +10,24 @@ spec:
     type: git
   - name: ui-image
     type: image
+  - name: command-image
+    type: image
+  - name: query-image
+    type: image
   - name: manifest-image
     type: image
   tasks:
-  # - name: get-sourcerepo-commit-id
-  #   taskRef:
-  #     name: akmebank-app-git-info
-  #   resources:
-  #     inputs:
-  #     - name: sourcerepo
-  #       resource: sourcerepo
-
   #----------------------------------------------
   #  Task 1: build ui image
   #----------------------------------------------
-  - name: build-and-push-akmebank-ui-image
+  - name: build-ui-image
     taskRef:
-      name: akmebank-app-image-task
-    # runAfter:
-    # - get-sourcerepo-commit-id
+      name: build-ui-image
     params:
       - name: pathToDockerFile
         value: ./Dockerfile
       - name: pathToContext
         value: /workspace/sourcerepo/akmebank-ui/
-      # # if params named "CHAINS-GIT_COMMIT" and "CHAINS-GIT_URL" are set,
-      # # the commitID and url will be included in attestation
-      # - name: CHAINS-GIT_COMMIT
-      #   value: $(tasks.get-sourcerepo-commit-id.results.commit-id)
-      # - name: CHAINS-GIT_URL
-      #   value: $(resources.sourcerepo.url)
     resources:
       inputs:
       - name: sourcerepo
@@ -48,11 +36,51 @@ spec:
       - name: builtImage
         resource: ui-image
   #----------------------------------------------
-  #  Task 2: build manifest image
+  #  Task 2: build command image
   #----------------------------------------------
-  - name: build-manifest-and-push-image
+  - name: build-command-image
     taskRef:
-      name: akmebank-app-kustomize-manifest-task
+      name: build-command-image
+    params:
+      - name: pathToDockerFile
+        value: ./src/main/docker/Dockerfile.jvm
+      - name: pathToContext
+        value: /workspace/sourcerepo/account-command-ms/
+    resources:
+      inputs:
+      - name: sourcerepo
+        resource: sourcerepo
+      outputs:
+      - name: builtImage
+        resource: command-image
+  #----------------------------------------------
+  #  Task 3: build query image
+  #----------------------------------------------
+  - name: build-query-image
+    taskRef:
+      name: build-query-image
+    params:
+      - name: pathToDockerFile
+        value: ./src/main/docker/Dockerfile.jvm
+      - name: pathToContext
+        value: /workspace/sourcerepo/account-query-ms/
+    resources:
+      inputs:
+      - name: sourcerepo
+        resource: sourcerepo
+      outputs:
+      - name: builtImage
+        resource: query-image
+  #----------------------------------------------
+  #  Task 4: build manifest image
+  #----------------------------------------------
+  - name: build-manifest-and-deploy-app
+    taskRef:
+      name: build-manifest-and-deploy-app
+    runAfter:
+    - build-ui-image
+    - build-command-image
+    - build-query-image
     params:
       - name: pathToKustomizeBase
         value: /workspace/kustomize-config-repo/roles/dev

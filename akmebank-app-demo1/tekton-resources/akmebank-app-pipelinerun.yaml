@@ -20,7 +20,7 @@ spec:
       type: git
       params:
       - name: revision
-        value: main
+        value: demo1
       - name: url
         value: https://github.com/hirokuni-kitahara/akmebank-config.git
   - name: ui-image
@@ -28,11 +28,23 @@ spec:
       type: image
       params:
       - name: url
-        value: gcr.io/hk-image-registry/akmebank-ui:4.0.1
+        value: gcr.io/hk-image-registry/akmebank-ui:4.1.1
+  - name: command-image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/hk-image-registry/account-command-ms:4.1.1
+  - name: query-image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/hk-image-registry/account-query-ms:4.1.1
   - name: manifest-image
     resourceSpec:
       type: image
       params:
       - name: url
-        value: gcr.io/hk-image-registry/akmebank-app-manifest:1.0.0
+        value: gcr.io/hk-image-registry/akmebank-app-manifest:4.1.1
 
