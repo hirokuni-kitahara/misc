@@ -1,0 +1,29 @@
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: kustomize-helloworld-pipelinerun
+spec:
+  serviceAccountName: tekton-github-account
+  pipelineRef:
+    name: kustomize-helloworld-pipeline
+  params:
+  - name: path-to-kustomize-base
+    value: examples/helloWorld
+  - name: deploy-namespace
+    value: sample-app
+  resources:
+  - name: kustomize-config-repo
+    resourceSpec:
+      type: git
+      params:
+      - name: revision
+        value: master
+      - name: url
+        value: https://github.com/kubernetes-sigs/kustomize.git
+  - name: manifest-image
+    resourceSpec:
+      type: image
+      params:
+      - name: url
+        value: gcr.io/hk-image-registry/kustomize-helloworld-manifest:dev
+

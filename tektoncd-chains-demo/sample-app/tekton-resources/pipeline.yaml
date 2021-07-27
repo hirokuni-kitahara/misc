@@ -1,0 +1,36 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: kustomize-helloworld-pipeline
+spec:
+  params:
+  - name: path-to-kustomize-base
+    type: string
+    description: The base directory of kustomize command
+  - name: deploy-namespace
+    type: string
+    description: The namespace in which app manifest will be deployed
+  resources:
+  - name: kustomize-config-repo
+    type: git
+  - name: manifest-image
+    type: image
+  tasks:
+  #----------------------------------------------
+  #  Task 1: build manifest image
+  #----------------------------------------------
+  - name: build-manifest-and-deploy-app
+    taskRef:
+      name: build-manifest-and-deploy-app
+    params:
+      - name: pathToKustomizeBase
+        value: $(params.path-to-kustomize-base)
+      - name: deployNamespace
+        value: $(params.deploy-namespace)
+    resources:
+      inputs:
+      - name: kustomize-config-repo
+        resource: kustomize-config-repo
+      outputs:
+      - name: builtImage
+        resource: manifest-image
