@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io/ioutil"
@@ -102,6 +103,58 @@ func GenerateAttestation(provPath, privKeyPath string) (*ssl.Envelope, error) {
 		return nil, err
 	}
 	return envelope, nil
+}
+
+func GetDigestOfArtifact(artifactPath string) (string, error) {
+	var digest string
+	var err error
+	if kustomizeutil.FileExists(artifactPath) {
+		// if file exists, then use hash of the file
+		digest, err = kustomizeutil.Sha256Hash(artifactPath)
+	} else {
+		// otherwise, artifactPath should be an image ref
+		digest, err = GetImageDigest(artifactPath)
+	}
+	return digest, err
+}
+
+func OverwriteArtifactInProvenance(provPath, overwriteArtifact string) (string, error) {
+	b, err := ioutil.ReadFile(provPath)
+	if err != nil {
+		return "", err
+	}
+	var prov *intoto.Statement
+	err = json.Unmarshal(b, &prov)
+	if err != nil {
+		return "", err
+	}
+	digest, err := GetDigestOfArtifact(overwriteArtifact)
+	if err != nil {
+		return "", err
+	}
+	subj := intoto.Subject{
+		Name: overwriteArtifact,
+		Digest: intoto.DigestSet{
+			"sha256": digest,
+		},
+	}
+	if len(prov.Subject) == 0 {
+		prov.Subject = append(prov.Subject, subj)
+	} else {
+		prov.Subject[0] = subj
+	}
+	provBytes, _ := json.Marshal(prov)
+	dir, err := ioutil.TempDir("", "newprov")
+	if err != nil {
+		return "", err
+	}
+	basename := filepath.Base(provPath)
+	newProvPath := filepath.Join(dir, basename)
+	err = ioutil.WriteFile(newProvPath, provBytes, 0644)
+	if err != nil {
+		return "", err
+	}
+	return newProvPath, nil
 }
 
 func generateMaterialsFromKustomization(kustomizeBase string) ([]intoto.ProvenanceMaterial, error) {
