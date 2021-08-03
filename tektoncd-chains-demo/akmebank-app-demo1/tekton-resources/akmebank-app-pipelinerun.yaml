@@ -6,6 +6,9 @@ spec:
   serviceAccountName: tekton-github-account
   pipelineRef:
     name: akmebank-app-pipeline
+  params:
+  - name: manifestImageName
+    value: gcr.io/hk-image-registry/akmebank-app-manifest:4.1.1
   resources:
   - name: sourcerepo
     resourceSpec:
@@ -41,10 +44,10 @@ spec:
       params:
       - name: url
         value: gcr.io/hk-image-registry/account-query-ms:4.1.1
-  - name: manifest-image
-    resourceSpec:
-      type: image
-      params:
-      - name: url
-        value: gcr.io/hk-image-registry/akmebank-app-manifest:4.1.1
+  # - name: manifest-image
+  #   resourceSpec:
+  #     type: image
+  #     params:
+  #     - name: url
+  #       value: gcr.io/hk-image-registry/akmebank-app-manifest:4.1.1
 

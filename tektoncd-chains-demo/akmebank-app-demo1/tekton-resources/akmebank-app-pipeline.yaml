@@ -3,6 +3,10 @@ kind: Pipeline
 metadata:
   name: akmebank-app-pipeline
 spec:
+  params:
+  - name: manifestImageName
+    type: string
+    description: The image name of manifest
   resources:
   - name: sourcerepo
     type: git
@@ -14,8 +18,8 @@ spec:
     type: image
   - name: query-image
     type: image
-  - name: manifest-image
-    type: image
+  # - name: manifest-image
+  #   type: image
   tasks:
   #----------------------------------------------
   #  Task 1: build ui image
@@ -84,10 +88,9 @@ spec:
     params:
       - name: pathToKustomizeBase
         value: /workspace/kustomize-config-repo/roles/dev
+      - name: builtImageName
+        value: $(params.manifestImageName)
     resources:
       inputs:
       - name: kustomize-config-repo
         resource: kustomize-config-repo
-      outputs:
-      - name: builtImage
-        resource: manifest-image

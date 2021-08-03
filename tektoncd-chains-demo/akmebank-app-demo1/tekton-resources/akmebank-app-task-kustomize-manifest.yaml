@@ -12,14 +12,13 @@ spec:
     type: string
     description: The namespace in which app manifest will be deployed
     default: "" # if empty, use namespace metadata if specified in manifest; otherwise just use `default` ns
+  - name: builtImageName
+    type: string
+    description: The image name of built manifest
   resources:
     inputs:
     - name: kustomize-config-repo
       type: git
-    outputs:
-    - name: builtImage
-      type: image
-      targetPath: /workspace/kustomize-config-repo/image-digest
   steps:
   # --------------------------------------------------
   #  Step 1: build a manifest YAML with kustomize
@@ -37,7 +36,19 @@ spec:
     - name: kust-result
       mountPath: /etc/kust-result
   # --------------------------------------------------
-  #  Step 2: create a manifest image and sign it with kubectl-sigstore
+  #  Step 2: generate provenance.json
+  # --------------------------------------------------
+  - name: genprov
+    image: gcr.io/hk-image-registry/genprov:dev
+    imagePullPolicy: Always
+    script: |
+      #!/bin/bash
+      genprov $(params.pathToKustomizeBase) /etc/kust-result/manifest.yaml > /etc/kust-result/provenance.json
+    volumeMounts:
+    - name: kust-result
+      mountPath: /etc/kust-result
+  # --------------------------------------------------
+  #  Step 3: create a manifest image and sign it with kubectl-sigstore
   # --------------------------------------------------
   - name: k8s-manifest-sign
     image: gcr.io/hk-image-registry/kubectl-sigstore:dev
@@ -46,7 +57,7 @@ spec:
     args:
     - sign
     - --filename=/etc/kust-result/manifest.yaml
-    - --image=$(outputs.resources.builtImage.url)
+    - --image=$(params.builtImageName)
     - --key=/secret/cosign.key
     env:
     - name: COSIGN_PASSWORD # this env variable is used by cosign password function
@@ -62,21 +73,52 @@ spec:
     - name: gcr-registry-docker-config
       mountPath: /root/.docker/
   # --------------------------------------------------
-  #  Step 3: get image layout file (index.json) with skopeo
+  #  Step 4: generate attestation.json
   # --------------------------------------------------
-  - name: get-image-digest
-    image: quay.io/skopeo/stable:latest
-    command:
-    - skopeo
-    args:
-    - copy
-    - docker://$(outputs.resources.builtImage.url)
-    - oci:/workspace/kustomize-config-repo/image-digest
+  - name: gen-attestation
+    image: gcr.io/hk-image-registry/gen-attestation:dev
+    imagePullPolicy: Always
+    script: |
+      #!/bin/bash
+      gen-attestation /etc/kust-result/provenance.json /secret/cosign.key $(params.builtImageName) > /etc/kust-result/attestation.json
+    env:
+    - name: COSIGN_PASSWORD # this env variable is used by cosign password function
+      valueFrom:
+        secretKeyRef:
+          name: signing-secrets
+          key: cosign.password
     volumeMounts:
-    - name: gcr-registry-docker-config
-      mountPath: /root/.docker/
+    - name: kust-result
+      mountPath: /etc/kust-result
+    - name: signing-secrets
+      mountPath: /secret
+ # --------------------------------------------------
+  #  Step 5: upload attestation to rekor
   # --------------------------------------------------
-  #  Step 4: deploy the built manifest
+  - name: upload-attestation
+    image: gcr.io/hk-image-registry/rekor-cli:dev
+    imagePullPolicy: Always
+    command: 
+    - rekor-cli
+    args:
+    - upload
+    - --artifact=/etc/kust-result/attestation.json
+    - --public-key=/secret/cosign.pub
+    - --pki-format=x509
+    - --type=intoto:0.0.1
+    env:
+    - name: COSIGN_PASSWORD # this env variable is used by cosign password function
+      valueFrom:
+        secretKeyRef:
+          name: signing-secrets
+          key: cosign.password
+    volumeMounts:
+    - name: kust-result
+      mountPath: /etc/kust-result
+    - name: signing-secrets
+      mountPath: /secret
+  # --------------------------------------------------
+  #  Step 6: deploy the built manifest
   # --------------------------------------------------
   - name: deploy-app
     image: bitnami/kubectl:1.20.9
